@@ -18,13 +18,13 @@
  #define NUM_RX_MAILBOXES 32
  using namespace qindesign::network;
  
- /* Fixed UDP/MIT layout (change together with spine_board.cpp kTeensy* and main.cpp host_cfg::kWire*). */
+ /* Fixed UDP/MIT layout (change together with spine_board.cpp kTeensy* and apps/motor_teleop.cpp cfg::kWire*). */
  constexpr int TEENSY_NUM_LOGICAL_BUSES = 2;
  constexpr int TEENSY_MAX_NODES_PER_BUS = 3;
  constexpr int TEENSY_UDP_PAYLOAD_BYTES = TEENSY_NUM_LOGICAL_BUSES * TEENSY_MAX_NODES_PER_BUS * 8;
  
  // =============================================================================
- // CONFIG — topology and IDs (mirror host_cfg / SpineBoard constructor in apps/main.cpp)
+ // CONFIG — topology and IDs (mirror cfg:: / SpineBoard constructor in apps/motor_teleop.cpp)
  // =============================================================================
  /* Motors physically on CAN3 (logical bus 0), node indices 0 .. N-1 in the UDP wire’s first bus block. */
  #define NUM_ACTIVE_NODES_BUS0 2
@@ -272,7 +272,7 @@
  
      Serial.printf("MOTOR_ID_BASE=%d  bus0 nodes=%d  bus1 nodes=%d  daisy wait=%d  timing avg every %d fb\r\n",
                    MOTOR_ID_BASE, NUM_ACTIVE_NODES_BUS0, NUM_ACTIVE_NODES_BUS1, NUM_DAISY_MOTORS, MAX_NUM_SAMPLES);
-     Serial.println(F("Ready — UDP payload+CRC per layout consts; PC: test_spine"));
+     Serial.println(F("Ready — UDP payload+CRC per layout consts; PC: motor_teleop"));
  
      pinMode(LED_BUILTIN, OUTPUT);
      digitalWrite(LED_BUILTIN, HIGH);

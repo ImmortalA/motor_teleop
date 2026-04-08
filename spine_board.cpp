@@ -8,7 +8,7 @@ namespace {
 /*
  * UDP wire layout (bytes on the wire before CRC8):
  *   [ bus0: node0..nodeN-1 ][ bus1: node0.. ]  with N ≤ kTeensyMaxNodesPerBus, 8 bytes per node (MIT frame).
- * Must match TEENSY_* constants at the top of teensy/teensy.ino.
+ * Must match TEENSY_* constants at the top of teensy_mt/teensy_mt.ino.
  */
 constexpr int kTeensyNumLogicalBuses = 2;
 constexpr int kTeensyMaxNodesPerBus = 3;
@@ -136,7 +136,7 @@ SpineBoard::SpineBoard(const std::string &ip, const std::string &interface, int 
 }
 
 // -----------------------------------------------------------------------------
-// initBoard — startup handshake sent to Teensy (reset, exit mode, MIT zeros, enter mode, MIT zeros again)
+// initBoard — reset, then exit / MIT zero / enter / MIT zero (same as exitAndEnableMotorMode without UDP lock contention)
 // -----------------------------------------------------------------------------
 void SpineBoard::initBoard()
 {
@@ -145,225 +145,120 @@ void SpineBoard::initBoard()
         std::cerr << "Actuator parameters not set. Exiting..." << std::endl;
         exit(-1);
     }
-    std::vector<uint8_t> data_to_send(num_nodes * 8 * num_buses);
 
-    // -------- Step 1: Reset --------
     std::vector<uint8_t> reset_data(1, 0xFF);
     send_data_to_teensy(reset_data, 1);
     std::this_thread::sleep_for(std::chrono::microseconds(1000000));
 
-    printf("Reset sent \n");
-    printf("num_buses: %d\n", num_buses);
+    mitExitZeroEnterZeroHandshake();
+    std::cout << "initBoard: ready\n";
+}
 
-    // -------- Step 2: Exit motor mode --------
+void SpineBoard::mitExitZeroEnterZeroHandshake()
+{
+    std::vector<uint8_t> data_to_send(num_nodes * 8 * num_buses);
+
     for (int j = 0; j < num_buses; j++)
     {
-        // bus &current_bus = bus_list[j];
         uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
-
         for (int i = 0; i < num_nodes; i++)
-        {
             pack_exit_motor_mode_cmd(bus_data + i * 8);
-        }
     }
-
-    send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
-
+    send_payload_unlocked(data_to_send, num_buses * num_nodes * 8);
     std::this_thread::sleep_for(std::chrono::microseconds(1000000));
 
-    printf("Exit motor mode sent \n");
-    // exit(0);
-
-// #ifdef ZERO_ENCODERS
-//     // send zero encoder command
-//     data_to_send = std::vector<uint8_t>(num_nodes * 8 * num_buses);
-
-//     for (int j = 0; j < num_buses; j++)
-//     {
-//         // bus &current_bus = bus_list[j];
-//         uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
-
-//         for (int i = 0; i < num_nodes; i++)
-//         {
-//             pack_zero_encoder(bus_data + i * 8);
-//         }
-//     }
-//     send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
-//     std::this_thread::sleep_for(std::chrono::microseconds(1000000));
-//     printf("Zero encoder sent \n");
-
-// #endif
-
-    // -------- Step 3: MIT zero command (before enter motor mode) --------
-    for (int j(0); j < num_buses; j++)
     {
-        for (int i = 0; i < num_nodes; i++)
+        std::lock_guard<std::mutex> lock(bus_list_mutex);
+        for (int j = 0; j < num_buses; j++)
         {
-            bus_list[j].command.j[i].v_des = 0.0f;
-            bus_list[j].command.j[i].p_des = 0.0f;
-            bus_list[j].command.j[i].kp = 0.0f;
-            bus_list[j].command.j[i].kd = 0.0f;
-            bus_list[j].command.j[i].t_ff = 0.0f;
+            for (int i = 0; i < num_nodes; i++)
+            {
+                bus_list[j].command.j[i].v_des = 0.0f;
+                bus_list[j].command.j[i].p_des = 0.0f;
+                bus_list[j].command.j[i].kp = 0.0f;
+                bus_list[j].command.j[i].kd = 0.0f;
+                bus_list[j].command.j[i].t_ff = 0.0f;
+            }
+        }
+        for (int j = 0; j < num_buses; j++)
+        {
+            bus &current_bus = bus_list[j];
+            uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
+            for (int i = 0; i < num_nodes; i++)
+                pack_cmd(bus_data + i * 8, current_bus, i);
         }
     }
+    send_payload_unlocked(data_to_send, num_buses * num_nodes * 8);
+    std::this_thread::sleep_for(std::chrono::microseconds(1000000));
 
     for (int j = 0; j < num_buses; j++)
     {
-        bus &current_bus = bus_list[j];
         uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
         for (int i = 0; i < num_nodes; i++)
-            pack_cmd(bus_data + i * 8, current_bus, i);
-    }
-    send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
-    std::this_thread::sleep_for(std::chrono::microseconds(1000000));
-    printf("MIT zero command sent (before enter motor mode) \n");
-
-    // -------- Step 4: Enter motor mode --------
-    for (int j = 0; j < num_buses; j++)
-    {
-        // bus &current_bus = bus_list[j];
-        uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
-
-        for (int i = 0; i < num_nodes; i++)
-        {
             pack_enter_motor_mode_cmd(bus_data + i * 8);
-        }
     }
-
-    // Send enter motor mode
-    send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
+    send_payload_unlocked(data_to_send, num_buses * num_nodes * 8);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
     std::this_thread::sleep_for(std::chrono::microseconds(500000));
 
-    printf("Enter motor mode sent \n");
-
-    // -------- Step 5: MIT zero after enter motor mode --------
-    for (int j(0); j < num_buses; j++)
     {
-        for (int i = 0; i < num_nodes; i++)
+        std::lock_guard<std::mutex> lock(bus_list_mutex);
+        for (int j = 0; j < num_buses; j++)
         {
-            bus_list[j].command.j[i].v_des = 0.0f;
-            bus_list[j].command.j[i].p_des = 0.0f;
-            bus_list[j].command.j[i].kp = 0.0f;
-            bus_list[j].command.j[i].kd = 0.0f;
-            bus_list[j].command.j[i].t_ff = 0.0f;
+            for (int i = 0; i < num_nodes; i++)
+            {
+                bus_list[j].command.j[i].v_des = 0.0f;
+                bus_list[j].command.j[i].p_des = 0.0f;
+                bus_list[j].command.j[i].kp = 0.0f;
+                bus_list[j].command.j[i].kd = 0.0f;
+                bus_list[j].command.j[i].t_ff = 0.0f;
+            }
+        }
+        for (int j = 0; j < num_buses; j++)
+        {
+            bus &current_bus = bus_list[j];
+            uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
+            for (int i = 0; i < num_nodes; i++)
+                pack_cmd(bus_data + i * 8, current_bus, i);
         }
     }
-    for (int j = 0; j < num_buses; j++)
-    {
-        bus &current_bus = bus_list[j];
-        uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
-        for (int i = 0; i < num_nodes; i++)
-            pack_cmd(bus_data + i * 8, current_bus, i);
-    }
-    send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
+    send_payload_unlocked(data_to_send, num_buses * num_nodes * 8);
     std::this_thread::sleep_for(std::chrono::microseconds(1000000));
-    printf("MIT zero command sent after motor mode \n");
 }
 
-// -------- Alternative init (commented out) --------
-// void SpineBoard::initBoard()
-// {
-//     restBoard();
-//     exitMotorMode();
-//     zeroEncoders();
-//     zeroMotorCommand();
-//     enterMotorMode();
-//     zeroMotorCommand();
-//     printf("Board initialized\n");
-// }
-
-// -----------------------------------------------------------------------------
-// Standalone init helpers (restBoard, exitMotorMode, enterMotorMode, zeroMotorCommand, zeroEncoders)
-// -----------------------------------------------------------------------------
-void SpineBoard::restBoard()
+void SpineBoard::exitAndEnableMotorMode()
 {
-    printf("Sending rest command...\n");
-    if (!actuator_params_set)
-    {
-        std::cerr << "Actuator parameters not set. Exiting..." << std::endl;
-        exit(-1);
-    }
-    // Spine board reset command
-    std::vector<uint8_t> reset_data(1, 0xFF);
-    send_data_to_teensy(reset_data, 1);
-    std::this_thread::sleep_for(std::chrono::microseconds(1000000));
-    printf("Reset sent \n");
+    std::lock_guard<std::mutex> udp_lock(send_udp_mutex_);
+    mitExitZeroEnterZeroHandshake();
 }
 
-void SpineBoard::exitMotorMode()
+void SpineBoard::send_payload_unlocked(const std::vector<uint8_t> &data, const int data_size)
 {
-    printf("Sending exit motor mode command\n");
-    std::vector<uint8_t> data_to_send(num_nodes * 8 * num_buses);
-    for (int j = 0; j < num_buses; j++)
+    std::vector<uint8_t> payload;
+    if (data_size == kTeensyPayloadBytes)
     {
-        uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
-
-        for (int i = 0; i < num_nodes; i++)
+        if (static_cast<int>(data.size()) < kTeensyPayloadBytes)
         {
-            pack_exit_motor_mode_cmd(bus_data + i * 8);
+            std::cerr << "send_payload_unlocked: need " << kTeensyPayloadBytes << " bytes, got " << data.size() << std::endl;
+            return;
         }
+        payload.assign(data.begin(), data.begin() + kTeensyPayloadBytes);
+    }
+    else if (data_size == num_buses * num_nodes * 8 && data_size <= kTeensyPayloadBytes)
+    {
+        payload.resize(kTeensyPayloadBytes);
+        logical_to_teensy_payload(data.data(), num_buses, num_nodes, payload.data());
+    }
+    else
+    {
+        payload.assign(data.begin(), data.end());
+        payload.resize(static_cast<size_t>(data_size), 0);
     }
 
-    send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
-
-    std::this_thread::sleep_for(std::chrono::microseconds(1000000));
-
-    printf("Exit motor mode sent \n");
-}
-
-void SpineBoard::enterMotorMode()
-{
-    printf("Sending enter motor mode command ...\n");
-    std::vector<uint8_t> data_to_send(num_nodes * 8 * num_buses);
-    // Send enter motor mode command
-    for (int j = 0; j < num_buses; j++)
-    {
-        // bus &current_bus = bus_list[j];
-        uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
-
-        for (int i = 0; i < num_nodes; i++)
-        {
-            pack_enter_motor_mode_cmd(bus_data + i * 8);
-        }
-    }
-    send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
-    std::this_thread::sleep_for(std::chrono::microseconds(1000000));
-    printf("Enter motor mode sent \n");
-}
-
-void SpineBoard::zeroMotorCommand()
-{
-    std::vector<uint8_t> data_to_send(num_nodes * 8 * num_buses);
-    printf("Sending zero command ...\n");
-    for (int j(0); j < num_buses; j++)
-    {
-        for (int i = 0; i < num_nodes; i++)
-        {
-            bus_list[j].command.j[i].v_des = 0.0f;
-            bus_list[j].command.j[i].p_des = 0.0f;
-            bus_list[j].command.j[i].kp = 0.0f;
-            bus_list[j].command.j[i].kd = 0.0f;
-            bus_list[j].command.j[i].t_ff = 0.0f;
-        }
-    }
-
-    // Pack the data to send
-    for (int j = 0; j < num_buses; j++)
-    {
-        bus &current_bus = bus_list[j];
-        uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
-
-        for (int i = 0; i < num_nodes; i++)
-        {
-            pack_cmd(bus_data + i * 8, current_bus, i);
-        }
-    }
-
-    send_data_to_teensy(data_to_send, num_buses * num_nodes * 8);
-    std::this_thread::sleep_for(std::chrono::microseconds(1000000));
-    printf("Zero Command sent \n");
+    uint8_t crc_value = calculate_crc8(payload.data(), payload.size());
+    std::vector<uint8_t> packet(payload);
+    packet.push_back(crc_value);
+    sock_send.send_to(asio::buffer(packet), udp::endpoint(asio::ip::make_address(teensy_ip), teensy_port));
 }
 
 void SpineBoard::zeroEncoders()
@@ -489,49 +384,8 @@ void SpineBoard::start()
 // -----------------------------------------------------------------------------
 void SpineBoard::send_data_to_teensy(const std::vector<uint8_t> &data, const int data_size)
 {
-    std::vector<uint8_t> payload;
-    /* Full wire already packed (e.g. 48 B). */
-    if (data_size == kTeensyPayloadBytes) {
-        if (static_cast<int>(data.size()) < kTeensyPayloadBytes)
-        {
-            std::cerr << "send_data_to_teensy: need " << kTeensyPayloadBytes << " bytes, got " << data.size() << std::endl;
-            return;
-        }
-        payload.assign(data.begin(), data.begin() + kTeensyPayloadBytes);
-    } else if (data_size == num_buses * num_nodes * 8 && data_size <= kTeensyPayloadBytes) {
-        /* Compact host buffer (no padding) → padded wire layout. */
-        payload.resize(kTeensyPayloadBytes);
-        logical_to_teensy_payload(data.data(), num_buses, num_nodes, payload.data());
-    } else {
-        /* Special cases: e.g. 1-byte reset (0xFF). */
-        payload.assign(data.begin(), data.end());
-        payload.resize(data_size, 0);
-    }
-
-    // Calculate CRC-8 for the payload
-    uint8_t crc_value = calculate_crc8(payload.data(), payload.size());
-
-    // Append the CRC value to the payload
-    std::vector<uint8_t> packet(payload);
-    packet.push_back(crc_value);
-
-    // Send the data to the Teensy
-    sock_send.send_to(asio::buffer(packet), udp::endpoint(asio::ip::make_address(teensy_ip), teensy_port));
-
-    // check if crc != 85
-    // if ((int)crc_value != 133) // zero command crc value is 133
-    // {
-    //     printf("crc_value: %d\n", crc_value);
-
-    //     // print out the packet in a human-readable format
-    //     std::cout << "Board: " << board_name << std::endl;
-    //     std::cout << "Sent packet: ";
-    //     for (int i = 0; i < packet.size(); i++)
-    //     {
-    //         std::cout << std::hex << (int)packet[i] << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
+    std::lock_guard<std::mutex> lock(send_udp_mutex_);
+    send_payload_unlocked(data, data_size);
 }
 
 // -----------------------------------------------------------------------------
@@ -541,30 +395,26 @@ void SpineBoard::process_data(const std::vector<uint8_t> &data_list)
 {
     std::lock_guard<std::mutex> lock(bus_list_mutex);
 
-    if (data_list.size() >= kTeensyPayloadBytes) {
-        /* Full wire: bus j starts at j * num_nodes * 8 in our logical view (same ordering as logical_to_teensy_payload). */
-        for (int j = 0; j < num_buses; j++) {
-            size_t bus_offset = j * num_nodes * 8;
-            if (bus_offset + num_nodes * 8 > data_list.size())
-                break;
-            for (int i = 0; i < num_nodes; i++) {
-                std::vector<uint8_t> node_data(data_list.begin() + bus_offset + i * 8,
-                                               data_list.begin() + bus_offset + (i + 1) * 8);
+    if (data_list.size() >= static_cast<size_t>(kTeensyPayloadBytes)) {
+        /* Padded wire: bus j at j * kTeensyMaxNodesPerBus * 8 (must match logical_to_teensy_payload). */
+        for (int j = 0; j < num_buses; ++j) {
+            const size_t bus_wire_off = static_cast<size_t>(j) * kTeensyMaxNodesPerBus * 8;
+            for (int i = 0; i < num_nodes; ++i) {
+                const size_t off = bus_wire_off + static_cast<size_t>(i) * 8;
+                std::vector<uint8_t> node_data(data_list.begin() + off, data_list.begin() + off + 8);
                 unpack_reply(node_data, bus_list[j], i);
             }
         }
         return;
     }
 
-    for (int j(0); j < num_buses; j++)
-    {
-        size_t bus_offset = j * num_nodes * 8;
-        if (bus_offset + num_nodes * 8 > data_list.size())
+    for (int j = 0; j < num_buses; ++j) {
+        const size_t bus_offset = static_cast<size_t>(j) * static_cast<size_t>(num_nodes) * 8;
+        if (bus_offset + static_cast<size_t>(num_nodes) * 8 > data_list.size())
             break;
-        std::vector<uint8_t> bus_data(data_list.begin() + bus_offset, data_list.begin() + bus_offset + num_nodes * 8);
-        for (int i = 0; i < num_nodes; i++)
-        {
-            std::vector<uint8_t> node_data(bus_data.begin() + i * 8, bus_data.begin() + (i + 1) * 8);
+        for (int i = 0; i < num_nodes; ++i) {
+            const size_t off = bus_offset + static_cast<size_t>(i) * 8;
+            std::vector<uint8_t> node_data(data_list.begin() + off, data_list.begin() + off + 8);
             unpack_reply(node_data, bus_list[j], i);
         }
     }
@@ -579,33 +429,11 @@ void SpineBoard::update_command()
 // -----------------------------------------------------------------------------
 void SpineBoard::handle_udp_packet(const udp::endpoint &client_endpoint, const std::vector<uint8_t> &data)
 {
-    static std::chrono::time_point<std::chrono::steady_clock> last_time = std::chrono::steady_clock::now();
+    (void)client_endpoint;
     std::vector<uint8_t> data_list(data.begin(), data.end());
 
     if (boardInitialized)
         process_data(data_list);
-#ifdef DEBUG_MODE
-    for (int j(0); j < num_buses; j++)
-    {
-        printf("===============================BUS %d=====================================\n", j);
-        print_bus_state(bus_list[j], num_nodes);
-        printf("=========================================================================\n");
-    }
-#endif
     if (!first_state_received)
-    {
         first_state_received = true;
-    }
-    auto current_time = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsed_time = current_time - last_time;
-    last_time = current_time;
-#ifdef DEBUG_MODE
-    {
-        double sec = elapsed_time.count();
-        std::cout << "Elapsed time since last call: " << sec * 1000 << " ms";
-        if (sec > 0.0)
-            std::cout << " i.e. " << (1.0 / sec) << " Hz";
-        std::cout << std::endl;
-    }
-#endif
 }

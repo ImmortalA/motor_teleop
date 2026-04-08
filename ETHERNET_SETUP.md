@@ -22,20 +22,20 @@ Check: `ifconfig enp8s0` → `inet 192.168.0.100`.
 
 ---
 
-## 2. Host app (`apps/main.cpp`)
+## 2. Host app (`apps/motor_teleop.cpp`)
 
-- **BOARD_INTERFACE_NAME** = `"enp8s0"` (Ethernet).
-- **ACTUATOR_TEENSY_BOARD_IPS** = `{"192.168.0.101", ...}` — must match each Teensy’s static IP in firmware.
+- **`cfg::kInterface`** = `"enp8s0"` (Ethernet).
+- **`cfg::kTeensyIp`** = `"192.168.0.101"` — must match the Teensy static IP in firmware.
 
 ---
 
-## 3. Teensy firmware (teensy/teensy.ino)
+## 3. Teensy firmware (`teensy_mt/teensy_mt.ino`)
 
 **First Teensy (board 0) = 192.168.0.101, port 8003**
 
 ### Static IP on Teensy
 
-1. In **teensy/teensy.ino** set:
+1. In **teensy_mt.ino** set:
    - `#define USE_STATIC_IP 1`
    - `IPAddress teensyIP(192, 168, 0, 101);`  — board 0; use 102 for board 1
    - `IPAddress teensySubnet(255, 255, 255, 0);`
@@ -55,7 +55,7 @@ The firmware accepts a UDP control packet only after it has received **MIT feedb
 
 ---
 
-## 4. Serial timing (`teensy/teensy.ino`)
+## 4. Serial timing (`teensy_mt.ino`)
 
 Serial (115200) prints per-motor timing (avg fb interval, cmd→fb, one-shot send→response, and a daisy summary line when both motors finish a stats window). The next UDP batch is accepted only after feedback from all `NUM_DAISY_MOTORS` motors.
 
@@ -64,9 +64,9 @@ Serial (115200) prints per-motor timing (avg fb interval, cmd→fb, one-shot sen
 ## 5. Checklist
 
 - [ ] PC: enp8s0 = 192.168.0.100
-- [ ] apps (e.g. main.cpp): BOARD_INTERFACE_NAME = "enp8s0", ACTUATOR_TEENSY_BOARD_IPS[0] = "192.168.0.101"
-- [ ] teensy.ino: USE_STATIC_IP 1, teensyIP = 192.168.0.101, kPort 8003, udp.send("192.168.0.100", kPort, ...)
-- [ ] Rebuild host (`make`), re-upload Teensy, run `./test_spine`
+- [ ] apps/motor_teleop.cpp: kInterface = "enp8s0", kTeensyIp = "192.168.0.101"
+- [ ] teensy_mt.ino: USE_STATIC_IP 1, teensyIP = 192.168.0.101, kPort 8003, udp.send("192.168.0.100", kPort, ...)
+- [ ] Rebuild host (`cmake --build build`), re-upload Teensy, run `./motor_teleop`
 
 ---
 
@@ -74,7 +74,7 @@ Serial (115200) prints per-motor timing (avg fb interval, cmd→fb, one-shot sen
 
 If you see `Motor (board 0 CAN 1): p=-12.5` (or other values) but the motor does not move:
 
-1. **Motor CAN ID** – In **teensy/teensy.ino** set `MOTOR_ID` to match the first actuator’s configured CAN ID. Default is `1`. Re-upload after changes.
+1. **Motor CAN ID** – In **teensy_mt.ino** set `MOTOR_ID_BASE` to match the first actuator’s configured CAN ID. Re-upload after changes.
 2. **Confirm ID** – Use T-Motor configuration software or your CAN sniffer so each AK module’s ID matches `MOTOR_ID`, `MOTOR_ID+1`, … along the chain.
-3. **Debug** – Re-upload teensy.ino, open Serial Monitor (115200). Confirm the CAN ID in transmitted frames matches the motor.
-4. **Test position** – The host app (e.g. test_spine) sends position/velocity commands. If the motor is at -12.5 rad (raw 0), it should try to move toward the commanded position. Try a larger amplitude or step in the app to see if it responds.
+3. **Debug** – Re-upload teensy_mt.ino, open Serial Monitor (115200). Confirm the CAN ID in transmitted frames matches the motor.
+4. **Test position** – The host app `motor_teleop` sends position/velocity commands. If the motor is at -12.5 rad (raw 0), it should try to move toward the commanded position.

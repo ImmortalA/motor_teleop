@@ -279,11 +279,4 @@ void unpack_reply(const std::vector<uint8_t> &buf, bus &bus, const int node_id)
     bus.state.j[node_id].t = t;
 }
 
-void print_bus_state(const bus &bus, const int num_nodes)
-{
-    for (int i = 0; i < num_nodes; i++)
-    {
-        printf("Node %d: P: %f, V: %f, T: %f status %d\n", i, bus.state.j[i].p, bus.state.j[i].v, bus.state.j[i].t, bus.state.j[i].error_code);
-    }
-}
 #endif // SPINE_UTILS_H

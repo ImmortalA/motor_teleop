@@ -4,7 +4,7 @@
  * SpineBoard — one Teensy reachable over UDP: pack MIT commands, unpack feedback into bus_list.
  *
  * Constructor: (nodes, buses) define the host-side logical layout; send_data_to_teensy() maps that into
- * the fixed-size UDP payload (kTeensy* in spine_board.cpp) which must match teensy/teensy.ino.
+ * the fixed-size UDP payload (kTeensy* in spine_board.cpp) which must match teensy_mt/teensy_mt.ino.
  *
  * Threads: receive_thread blocks on server_socket (feedback from Teensy); send_thread runs initBoard() once
  * then loops packing pack_cmd and sending. Optional wait-for-feedback pairs one send with one receive.
@@ -19,9 +19,7 @@
 #include <vector>
 #include <asio.hpp>
 #include "utils.h"
-#include <cmath>
-// #define DEBUG_MODE
-#define ZERO_ENCODERS /* If defined, zeroEncoders() in start() may send encoder-zero frames where params say so */
+#define ZERO_ENCODERS /* zeroEncoders() in start() may send encoder-zero frames where params say so */
 
 using asio::ip::udp;
 class SpineBoard
@@ -48,12 +46,18 @@ private:
 
     /*
      * When true: after each UDP command to Teensy, send thread waits until receive_thread gets one datagram.
-     * Matches firmware that accepts the next command only after motor feedback (see teensy.ino).
+     * Matches firmware that accepts the next command only after motor feedback (see teensy_mt.ino).
      */
     std::atomic<bool> wait_for_feedback_after_send_{true};
     std::mutex feedback_sync_mutex_;
     std::condition_variable feedback_cv_;
     bool feedback_received_{false};
+
+    /* Serialize UDP sends so exit/enable handshake does not interleave with the MIT stream. */
+    std::mutex send_udp_mutex_;
+    void send_payload_unlocked(const std::vector<uint8_t> &data, int data_size);
+    /** Exit motor mode, MIT zero, enter motor mode, MIT zero (uses send_payload_unlocked). */
+    void mitExitZeroEnterZeroHandshake();
 
 public:
     /** @param nodes  joints per bus  @param buses  number of logical CAN buses  @param port  UDP port (host listens and sends) */
@@ -85,21 +89,6 @@ public:
         }
         actuator_params_set = true;
     }
-    std::vector<std::vector<ActuatorParams>> getBoardActuatorParams() const
-    {
-        std::lock_guard<std::mutex> lock(bus_list_mutex);
-        std::vector<std::vector<ActuatorParams>> params;
-        for (int j = 0; j < num_buses; j++)
-        {
-            std::vector<ActuatorParams> bus_params;
-            for (int i = 0; i < num_nodes; i++)
-            {
-                bus_params.push_back(bus_list[j].params[i]);
-            }
-            params.push_back(bus_params);
-        }
-        return params;
-    }
 
     std::vector<bus> getBusList() const
     {
@@ -115,6 +104,8 @@ public:
     void setAllowCommandSend(bool allow) { allow_command_send_ = allow; }
     /** Enable/disable RTT pacing between MIT send and next feedback (default true). */
     void setWaitForFeedbackAfterSend(bool wait) { wait_for_feedback_after_send_ = wait; }
+    /** Block until a full exit → MIT zero → enter → MIT zero sequence is sent (thread-safe vs send thread). */
+    void exitAndEnableMotorMode();
     ~SpineBoard()
     {
         for (int j = 0; j < num_buses; j++)
@@ -156,42 +147,6 @@ public:
             std::cerr << "Error closing server_socket: " << e.what() << std::endl;
         }
     }
-    /** Pin both IO threads to one CPU and raise priority (Linux real-time; requires permission). */
-    void setThreadAffinityAndPriority(int coreId, int priority=49)
-    {
-
-        /* Threads must be running before affinity is applied */
-        if (!receive_thread.joinable())
-        {
-            std::cerr << "Error: receive_thread is not joinable\n";
-            return;
-        }
-
-        if (!send_thread.joinable())
-        {
-            std::cerr << "Error: RC send_thread is not joinable\n";
-            return;
-        }
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(coreId, &cpuset);
-        int rc = pthread_setaffinity_np(receive_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
-        if (rc != 0)
-        {
-            std::cerr << "Error calling pthread_setaffinity_np on RC thread: " << rc << "\n";
-        }
-
-        rc = pthread_setaffinity_np(send_thread.native_handle(), sizeof(cpu_set_t), &cpuset);
-        if (rc != 0)
-        {
-            std::cerr << "Error calling pthread_setaffinity_np on IMU thread: " << rc << "\n";
-        }
-
-        sched_param param;
-        param.sched_priority = priority;
-        pthread_setschedparam(receive_thread.native_handle(), SCHED_FIFO, &param);
-        pthread_setschedparam(send_thread.native_handle(), SCHED_FIFO, &param);
-    }
     void join()
     {
         if (receive_thread.joinable())
@@ -203,11 +158,7 @@ public:
             send_thread.join();
         }
     }
-    void restBoard();
     void zeroEncoders();
-    void exitMotorMode();
-    void enterMotorMode();
-    void zeroMotorCommand();
     /** Set true at end of send-thread init (after initBoard / zeroEncoders). */
     bool boardInitialized = false;
 };
