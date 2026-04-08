@@ -22,3 +22,5 @@ mkdir -p build && cd build && cmake .. && cmake --build .
 ```
 
 Edit `cfg::` in `apps/motor_teleop.cpp` and the `CONFIG` block in `teensy_mt.ino` together (IP, port, node counts, wire padding). See `ETHERNET_SETUP.md`.
+
+For **low-latency command streaming** (~1 kHz), set `GATE_UDP_ON_DAISY_FEEDBACK` to `0` in `teensy_mt.ino` so the Teensy does not wait for a full daisy feedback round before accepting each UDP packet (must match how you use `setWaitForFeedbackAfterSend` on the host).

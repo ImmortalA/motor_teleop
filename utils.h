@@ -134,6 +134,7 @@ float uint_to_float(int x_int, float x_min, float x_max, int bits)
 int float_to_uint(float x, float x_min, float x_max, int bits)
 {
     /// Converts a float to an unsigned int, given range and number of bits ///
+    x = fminf(fmaxf(x_min, x), x_max);
     float span = x_max - x_min;
     float offset = x_min;
     return (int)((x - offset) * ((float)((1 << bits) - 1)) / span);
@@ -167,8 +168,12 @@ float sb_fmod(float a, float b)
     return a - b * floorf(a / b);
 }
 
-float wrap_angle(float angle) {
-    return fmodf(angle - WRAP_MIN, WRAP_RANGE) + WRAP_MIN;
+float wrap_angle(float angle)
+{
+    /* Map to [WRAP_MIN, WRAP_MAX); fmodf alone is wrong for angle < WRAP_MIN (negative remainder). */
+    float rel = angle - WRAP_MIN;
+    rel = rel - floorf(rel / WRAP_RANGE) * WRAP_RANGE;
+    return rel + WRAP_MIN;
 }
 
 // T-Motor AK MIT mode: 16b p + 12b v + 12b Kp + 12b Kd + 12b torque
@@ -240,6 +245,8 @@ void pack_zero_encoder(uint8_t *frame)
 
 void unpack_reply(const std::vector<uint8_t> &buf, bus &bus, const int node_id)
 {
+    if (buf.size() < 6)
+        return;
     auto &params = bus.params[node_id];
 
     int id = buf[0];

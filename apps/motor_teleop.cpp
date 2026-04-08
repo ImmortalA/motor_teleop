@@ -76,41 +76,40 @@ int main()
     float v_ff_B = 0.0f;
 
     while (true) {
-        std::vector<bus> buses = board.getBusList();
-        bus &bus0 = buses[kBus];
+        board.withBusList([&](std::vector<bus> &buses) {
+            bus &bus0 = buses[kBus];
 
-        const float qA = bus0.state.j[kA].p_orig;
-        const float qB = bus0.state.j[kB].p_orig;
-        const float vA = bus0.state.j[kA].v;
+            const float qA = bus0.state.j[kA].p_orig;
+            const float qB = bus0.state.j[kB].p_orig;
+            const float vA = bus0.state.j[kA].v;
 
-        if (!have_offset) {
-            offset_B_minus_A = shortest_angle_diff(qA, qB);
-            have_offset = true;
-            cmd_p_B = wrap_angle(qA + offset_B_minus_A);
-            v_ff_B = vA;
-        }
+            if (!have_offset) {
+                offset_B_minus_A = shortest_angle_diff(qA, qB);
+                have_offset = true;
+                cmd_p_B = wrap_angle(qA + offset_B_minus_A);
+                v_ff_B = vA;
+            }
 
-        bus0.command.j[kA].p_des = 0.0f;
-        bus0.command.j[kA].v_des = 0.0f;
-        bus0.command.j[kA].kp = 0.0f;
-        bus0.command.j[kA].kd = 0.0f;
-        bus0.command.j[kA].t_ff = 0.0f;
+            bus0.command.j[kA].p_des = 0.0f;
+            bus0.command.j[kA].v_des = 0.0f;
+            bus0.command.j[kA].kp = 0.0f;
+            bus0.command.j[kA].kd = 0.0f;
+            bus0.command.j[kA].t_ff = 0.0f;
 
-        const float p_target = wrap_angle(qA + offset_B_minus_A);
-        float delta = shortest_angle_diff(cmd_p_B, p_target);
-        delta = sb_fminf(sb_fmaxf(delta, -cfg::kMaxSlewRadPerTick), cfg::kMaxSlewRadPerTick);
-        cmd_p_B = wrap_angle(cmd_p_B + delta);
+            const float p_target = wrap_angle(qA + offset_B_minus_A);
+            float delta = shortest_angle_diff(cmd_p_B, p_target);
+            delta = sb_fminf(sb_fmaxf(delta, -cfg::kMaxSlewRadPerTick), cfg::kMaxSlewRadPerTick);
+            cmd_p_B = wrap_angle(cmd_p_B + delta);
 
-        v_ff_B += cfg::kVffLpfAlpha * (vA - v_ff_B);
-        const float v_cmd_B = sb_fminf(sb_fmaxf(-cfg::kVffMax, v_ff_B), cfg::kVffMax);
+            v_ff_B += cfg::kVffLpfAlpha * (vA - v_ff_B);
+            const float v_cmd_B = sb_fminf(sb_fmaxf(-cfg::kVffMax, v_ff_B), cfg::kVffMax);
 
-        bus0.command.j[kB].p_des = cmd_p_B;
-        bus0.command.j[kB].v_des = v_cmd_B;
-        bus0.command.j[kB].kp = cfg::kKpB;
-        bus0.command.j[kB].kd = cfg::kKdB;
-        bus0.command.j[kB].t_ff = 0.0f;
-
-        board.setBusList(buses);
+            bus0.command.j[kB].p_des = cmd_p_B;
+            bus0.command.j[kB].v_des = v_cmd_B;
+            bus0.command.j[kB].kp = cfg::kKpB;
+            bus0.command.j[kB].kd = cfg::kKdB;
+            bus0.command.j[kB].t_ff = 0.0f;
+        });
         std::this_thread::sleep_for(std::chrono::microseconds(1000));
     }
 }

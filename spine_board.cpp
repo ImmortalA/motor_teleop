@@ -136,7 +136,7 @@ SpineBoard::SpineBoard(const std::string &ip, const std::string &interface, int 
 }
 
 // -----------------------------------------------------------------------------
-// initBoard — reset, then exit / MIT zero / enter / MIT zero (same as exitAndEnableMotorMode without UDP lock contention)
+// initBoard — 0xFF reset, then mitExitZeroEnterZeroHandshake (exit → zero → enter → zero)
 // -----------------------------------------------------------------------------
 void SpineBoard::initBoard()
 {
@@ -264,24 +264,24 @@ void SpineBoard::send_payload_unlocked(const std::vector<uint8_t> &data, const i
 void SpineBoard::zeroEncoders()
 {
     std::vector<uint8_t> data_to_send(num_nodes * 8 * num_buses);
-
     bool any_recalibrate = false;
-    for (int j = 0; j < num_buses; j++)
-    {
-        uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
 
-        for (int i = 0; i < num_nodes; i++)
+    {
+        std::lock_guard<std::mutex> lock(bus_list_mutex);
+        for (int j = 0; j < num_buses; j++)
         {
-            if (bus_list[j].params[i].recalibrate)
+            uint8_t *bus_data = data_to_send.data() + j * num_nodes * 8;
+
+            for (int i = 0; i < num_nodes; i++)
             {
-                pack_zero_encoder(bus_data + i * 8);
-                any_recalibrate = true;
-                printf("Zeroing encoder for bus %d, node %d\n", j, i);
-            }
-            else
-            {
-                // Send zero command for actuators not being recalibrated
-                pack_cmd(bus_data + i * 8, bus_list[j], i);
+                if (bus_list[j].params[i].recalibrate)
+                {
+                    pack_zero_encoder(bus_data + i * 8);
+                    any_recalibrate = true;
+                    printf("Zeroing encoder for bus %d, node %d\n", j, i);
+                }
+                else
+                    pack_cmd(bus_data + i * 8, bus_list[j], i);
             }
         }
     }

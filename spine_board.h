@@ -101,6 +101,13 @@ public:
         std::lock_guard<std::mutex> lock(bus_list_mutex);
         bus_list = new_bus_list;
     }
+    /** Hold bus_list_mutex for the callback (read state / write commands; avoids racing receive_thread). */
+    template <typename Fn>
+    void withBusList(Fn &&fn)
+    {
+        std::lock_guard<std::mutex> lock(bus_list_mutex);
+        fn(bus_list);
+    }
     void setAllowCommandSend(bool allow) { allow_command_send_ = allow; }
     /** Enable/disable RTT pacing between MIT send and next feedback (default true). */
     void setWaitForFeedbackAfterSend(bool wait) { wait_for_feedback_after_send_ = wait; }
@@ -108,6 +115,7 @@ public:
     void exitAndEnableMotorMode();
     ~SpineBoard()
     {
+        /* Threads are not stopped here; do not destroy SpineBoard while start() threads are running. */
         for (int j = 0; j < num_buses; j++)
         {
             delete[] bus_list[j].state.j;
